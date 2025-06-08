@@ -62,38 +62,92 @@ CREATE TABLE Pagos (
     FOREIGN KEY (id_trabajo) REFERENCES Trabajos(id_trabajo)
 );
 
--- Inserción de datos
+-- Tabla de Empleados
+CREATE TABLE Empleados (
+    id_empleado INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    puesto VARCHAR(50),
+    telefono VARCHAR(20),
+    email VARCHAR(100)
+);
 
--- Clientes
-INSERT INTO Clientes (nombre, telefono, email) VALUES
-('Juan Pérez', '1134567890', 'juan@mail.com'),
-('Laura Fernández', '1145678901', 'laura@mail.com');
+-- Tabla de Tareas realizadas por empleados en cada trabajo
+CREATE TABLE Tareas (
+    id_tarea INT AUTO_INCREMENT PRIMARY KEY,
+    id_trabajo INT NOT NULL,
+    id_empleado INT NOT NULL,
+    descripcion TEXT,
+    fecha DATE,
+    duracion_horas DECIMAL(5,2),
+    FOREIGN KEY (id_trabajo) REFERENCES Trabajos(id_trabajo),
+    FOREIGN KEY (id_empleado) REFERENCES Empleados(id_empleado)
+);
 
--- Trabajos
-INSERT INTO Trabajos (id_cliente, descripcion, fecha_inicio, fecha_fin, estado) VALUES
-(1, 'Reja de ventana artística', '2025-05-01', '2025-05-10', 'Completado'),
-(2, 'Portón corredizo reforzado', '2025-05-05', NULL, 'En proceso');
+-- Tabla de Facturas (tabla de hechos)
+CREATE TABLE Facturas (
+    id_factura INT AUTO_INCREMENT PRIMARY KEY,
+    id_trabajo INT NOT NULL,
+    fecha DATE,
+    total DECIMAL(10,2),
+    observaciones TEXT,
+    FOREIGN KEY (id_trabajo) REFERENCES Trabajos(id_trabajo)
+);
 
--- Materiales
-INSERT INTO Materiales (nombre, tipo, unidad_medida, precio_estimado) VALUES
-('Hierro ángulo', 'chapa', 'metro', 800.00),
-('Electrodo E6013', 'consumible', 'unidad', 120.00);
+-- Tabla de Proveedores
+CREATE TABLE Proveedores (
+    id_proveedor INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    contacto VARCHAR(100),
+    telefono VARCHAR(20),
+    email VARCHAR(100)
+);
 
--- Detalle_Materiales_Trabajo
-INSERT INTO Detalle_Materiales_Trabajo (id_trabajo, id_material, cantidad) VALUES
-(1, 1, 6.5),
-(1, 2, 10),
-(2, 1, 12);
+-- Tabla de Pedidos de Materiales
+CREATE TABLE Pedidos_Materiales (
+    id_pedido INT AUTO_INCREMENT PRIMARY KEY,
+    id_proveedor INT NOT NULL,
+    id_material INT NOT NULL,
+    fecha DATE,
+    cantidad DECIMAL(10,2),
+    costo_unitario DECIMAL(10,2),
+    FOREIGN KEY (id_proveedor) REFERENCES Proveedores(id_proveedor),
+    FOREIGN KEY (id_material) REFERENCES Materiales(id_material)
+);
 
--- Presupuestos
-INSERT INTO Presupuestos (id_trabajo, fecha, monto_total, observaciones) VALUES
-(1, '2025-04-25', 15000.00, 'Incluye materiales reciclados'),
-(2, '2025-05-02', 27000.00, 'Falta definir automatización');
+-- Tabla de Inventario (stock actual de materiales)
+CREATE TABLE Inventario (
+    id_material INT PRIMARY KEY,
+    cantidad_disponible DECIMAL(10,2),
+    FOREIGN KEY (id_material) REFERENCES Materiales(id_material)
+);
 
--- Pagos
-INSERT INTO Pagos (id_trabajo, fecha, monto, metodo_pago) VALUES
-(1, '2025-05-10', 15000.00, 'Efectivo'),
-(2, '2025-05-07', 15000.00, 'Transferencia');
+-- Tabla 13: Historial de precios de materiales
+CREATE TABLE Precios_Materiales (
+    id_precio INT AUTO_INCREMENT PRIMARY KEY,
+    id_material INT NOT NULL,
+    fecha DATE NOT NULL,
+    precio_unitario DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (id_material) REFERENCES Materiales(id_material)
+);
+
+-- Tabla 14: Historial de estado de trabajos
+CREATE TABLE Historial_Estado_Trabajo (
+    id_historial INT AUTO_INCREMENT PRIMARY KEY,
+    id_trabajo INT NOT NULL,
+    fecha DATE NOT NULL,
+    estado_anterior VARCHAR(50),
+    estado_nuevo VARCHAR(50),
+    observaciones TEXT,
+    FOREIGN KEY (id_trabajo) REFERENCES Trabajos(id_trabajo)
+);
+
+-- Tabla 15: Usuarios del sistema
+CREATE TABLE Usuarios (
+    id_usuario INT AUTO_INCREMENT PRIMARY KEY,
+    nombre_usuario VARCHAR(50) NOT NULL,
+    clave VARCHAR(100) NOT NULL,
+    rol VARCHAR(50)
+);
 
 -- Vistas
 
@@ -117,6 +171,22 @@ FROM Trabajos t
 JOIN Detalle_Materiales_Trabajo d ON t.id_trabajo = d.id_trabajo
 JOIN Materiales m ON d.id_material = m.id_material;
 
+-- Vista 4: Trabajos ordenados por fecha
+CREATE VIEW vista_trabajos_ordenados_fecha AS
+SELECT * FROM Trabajos
+ORDER BY fecha_inicio ASC;
+
+-- Vista 5: Precios actuales de materiales
+CREATE VIEW vista_precios_actuales AS
+SELECT pm.id_material, m.nombre, pm.precio_unitario, pm.fecha
+FROM Precios_Materiales pm
+JOIN Materiales m ON pm.id_material = m.id_material
+WHERE pm.fecha = (
+    SELECT MAX(fecha)
+    FROM Precios_Materiales pm2
+    WHERE pm2.id_material = pm.id_material
+);
+
 -- Funciones
 
 -- Función 1: Verificar si un trabajo está totalmente pagado
@@ -138,10 +208,24 @@ BEGIN
 END//
 DELIMITER ;
 
--- Función 2: Obtener trabajos ordenados por fecha de inicio
-CREATE VIEW vista_trabajos_ordenados_fecha AS
-SELECT * FROM Trabajos
-ORDER BY fecha_inicio ASC;
+-- Función 2: Verificar si un material necesita reposición
+DELIMITER //
+CREATE FUNCTION necesita_reposicion(id_mat INT) RETURNS VARCHAR(2)
+DETERMINISTIC
+BEGIN
+    DECLARE stock DECIMAL(10,2);
+    SELECT cantidad_disponible INTO stock
+    FROM Inventario
+    WHERE id_material = id_mat;
+
+    IF stock < 5 THEN
+        RETURN 'Sí';
+    ELSE
+        RETURN 'No';
+    END IF;
+END//
+DELIMITER ;
+
 
 -- Stored Procedure: Registrar trabajo con presupuesto asociado
 DELIMITER //
@@ -182,15 +266,27 @@ BEGIN
 END//
 DELIMITER ;
 
--- Trigger: Marcar trabajo como 'Completado' cuando se actualiza la fecha_fin
+-- Trigger 1: Actualizar inventario cuando se usa material
 DELIMITER //
-CREATE TRIGGER actualizar_estado_trabajo
-BEFORE UPDATE ON Trabajos
+CREATE TRIGGER actualizar_stock_material
+AFTER INSERT ON Detalle_Materiales_Trabajo
 FOR EACH ROW
 BEGIN
-    IF NEW.fecha_fin IS NOT NULL AND OLD.fecha_fin IS NULL THEN
-        SET NEW.estado = 'Completado';
-    END IF;
+    UPDATE Inventario
+    SET cantidad_disponible = cantidad_disponible - NEW.cantidad
+    WHERE id_material = NEW.id_material;
 END//
 DELIMITER ;
 
+-- Trigger 2: Registrar historial de estado de trabajo
+DELIMITER //
+CREATE TRIGGER registrar_cambio_estado
+BEFORE UPDATE ON Trabajos
+FOR EACH ROW
+BEGIN
+    IF NEW.estado <> OLD.estado THEN
+        INSERT INTO Historial_Estado_Trabajo (id_trabajo, fecha, estado_anterior, estado_nuevo, observaciones)
+        VALUES (NEW.id_trabajo, CURDATE(), OLD.estado, NEW.estado, 'Cambio automático registrado por trigger');
+    END IF;
+END//
+DELIMITER ;

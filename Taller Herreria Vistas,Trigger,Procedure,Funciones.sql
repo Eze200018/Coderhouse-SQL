@@ -20,6 +20,22 @@ FROM Trabajos t
 JOIN Detalle_Materiales_Trabajo d ON t.id_trabajo = d.id_trabajo
 JOIN Materiales m ON d.id_material = m.id_material;
 
+-- Vista 4: Trabajos ordenados por fecha
+CREATE VIEW vista_trabajos_ordenados_fecha AS
+SELECT * FROM Trabajos
+ORDER BY fecha_inicio ASC;
+
+-- Vista 5: Precios actuales de materiales
+CREATE VIEW vista_precios_actuales AS
+SELECT pm.id_material, m.nombre, pm.precio_unitario, pm.fecha
+FROM Precios_Materiales pm
+JOIN Materiales m ON pm.id_material = m.id_material
+WHERE pm.fecha = (
+    SELECT MAX(fecha)
+    FROM Precios_Materiales pm2
+    WHERE pm2.id_material = pm.id_material
+);
+
 -- Funciones
 
 -- Función 1: Verificar si un trabajo está totalmente pagado
@@ -41,10 +57,24 @@ BEGIN
 END//
 DELIMITER ;
 
--- Función 2: Obtener trabajos ordenados por fecha de inicio
-CREATE VIEW vista_trabajos_ordenados_fecha AS
-SELECT * FROM Trabajos
-ORDER BY fecha_inicio ASC;
+-- Función 2: Verificar si un material necesita reposición
+DELIMITER //
+CREATE FUNCTION necesita_reposicion(id_mat INT) RETURNS VARCHAR(2)
+DETERMINISTIC
+BEGIN
+    DECLARE stock DECIMAL(10,2);
+    SELECT cantidad_disponible INTO stock
+    FROM Inventario
+    WHERE id_material = id_mat;
+
+    IF stock < 5 THEN
+        RETURN 'Sí';
+    ELSE
+        RETURN 'No';
+    END IF;
+END//
+DELIMITER ;
+
 
 -- Stored Procedure: Registrar trabajo con presupuesto asociado
 DELIMITER //
@@ -85,14 +115,27 @@ BEGIN
 END//
 DELIMITER ;
 
--- Trigger: Marcar trabajo como 'Completado' cuando se actualiza la fecha_fin
+-- Trigger 1: Actualizar inventario cuando se usa material
 DELIMITER //
-CREATE TRIGGER actualizar_estado_trabajo
+CREATE TRIGGER actualizar_stock_material
+AFTER INSERT ON Detalle_Materiales_Trabajo
+FOR EACH ROW
+BEGIN
+    UPDATE Inventario
+    SET cantidad_disponible = cantidad_disponible - NEW.cantidad
+    WHERE id_material = NEW.id_material;
+END//
+DELIMITER ;
+
+-- Trigger 2: Registrar historial de estado de trabajo
+DELIMITER //
+CREATE TRIGGER registrar_cambio_estado
 BEFORE UPDATE ON Trabajos
 FOR EACH ROW
 BEGIN
-    IF NEW.fecha_fin IS NOT NULL AND OLD.fecha_fin IS NULL THEN
-        SET NEW.estado = 'Completado';
+    IF NEW.estado <> OLD.estado THEN
+        INSERT INTO Historial_Estado_Trabajo (id_trabajo, fecha, estado_anterior, estado_nuevo, observaciones)
+        VALUES (NEW.id_trabajo, CURDATE(), OLD.estado, NEW.estado, 'Cambio automático registrado por trigger');
     END IF;
 END//
 DELIMITER ;
